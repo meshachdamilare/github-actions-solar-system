@@ -13,7 +13,7 @@ env:
     
 jobs:
 # We run a unit test that connects to db running in a service container
-# 
+# The node is not running inside the container
     unit-testing:
       name: Unit Testing
       runs-on: ubuntu-latest
