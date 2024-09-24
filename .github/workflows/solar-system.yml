@@ -178,7 +178,7 @@ jobs:
             kubeconfig: '${{ secrets.KUBECONFIG }}'
 
         - name: Fetch Kubernetes Cluster Details
-          run: kubectl version --short -o yaml
+          run: kubectl version
 
         - name: Fetch Nginx controller Ip and save to Github environment Variable
           run:  echo "INGRESS_IP=$(kubectl -n ingress-nginx get services \
@@ -195,3 +195,6 @@ jobs:
             REPLICAS: '${{ vars.REPLICAS }}'
             IMAGE: ghcr.io/${{ github.repository_owner }}/solar-system:${{ github.sha}}
             INGRESS_IP: '${{ env.INGRESS_IP }}'
+
+        - name: Check files with replaced values
+          run: cat kubernetes/development/*.yaml
