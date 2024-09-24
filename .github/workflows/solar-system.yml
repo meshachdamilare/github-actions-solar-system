@@ -178,7 +178,7 @@ jobs:
             kubeconfig: '${{ secrets.KUBECONFIG }}'
 
         - name: Fetch Kubernetes Cluster Details
-          run: kubectl version
+          run: kubectl version -o yaml
 
         - name: Fetch Nginx controller Ip and save to Github environment Variable
           run:  echo "INGRESS_IP=$(kubectl -n ingress-nginx get services \
