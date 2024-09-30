@@ -194,6 +194,7 @@ jobs:
         with:
           mongodb-uri: ${{ vars.MONGO_URI }}
           environment: development
+          kubectl-version:
           kube-manifest-dir: kubernetes/development/
 
     
