@@ -1,0 +1,200 @@
+name: Solar System Workflow
+
+on: 
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 'feature/*'
+env:
+  MONGO_URI: 'mongodb+srv://supercluster.d83jj.mongodb.net/superData'
+  MONGO_USERNAME: superuser
+  MONGO_PASSWORD: ${{ secrets.MONGO_PASSWORD }}
+    
+jobs:
+
+# We run a unit test that connects to db running in a service container
+# The node is not running inside the container
+    unit-testing:
+      name: Unit Testing
+      runs-on: ubuntu-latest
+      services:
+        mongo-db:
+          image: siddharth67/mongo-db:non-prod
+          ports:
+            - 27017:27017
+      env:
+        MONGO_URI: 'mongodb://localhost:27017/superData'
+        MONGO_USERNAME: non-prod-user
+        MONGO_PASSWORD: non-prod-password
+      
+      steps:
+        - name: Checkout Repository
+          uses: actions/checkout@v4
+
+        - name: Setup NodeJS Version
+          uses: actions/setup-node@v3
+          with:
+            node-version: 20
+
+        - name: Cache NPM dependencies
+          uses: actions/cache@v3
+          with:
+            path: ~/.npm
+            key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+    
+        - name: Install Dependencies
+          run: npm install
+    
+        - name: Unit Testing
+          run: npm test
+          
+        - name: Archive Test Result
+          if: always()
+          uses: actions/upload-artifact@v3
+          with:
+            name: Mocha-Test-Result
+            path: test-results.xml
+
+# We run the test coverage in a container both the application and the db
+# Since it container to conatiner application we do not need to expose port
+# And you can access the db with the service name 'mongo' 
+# This is how to automate testing that involves DB.... It's call Mocking
+    code-coverage:
+      runs-on: ubuntu-latest
+      container:
+        image: node:20
+      services:
+        mongo-db:
+          image: siddharth67/mongo-db:non-prod
+          options:
+            --name mongo
+      env:
+        MONGO_URI: 'mongodb://mongo:27017/superData'
+        MONGO_USERNAME: non-prod-user
+        MONGO_PASSWORD: non-prod-password
+
+      steps:
+        - name: Checkout Repository
+          uses: actions/checkout@v4
+        
+        # - name: SetUp Nodejs Version
+        #   uses: actions/setup-node@v3
+        #   with:
+        #     node-version: 18
+        
+        - name: Cache NPM dependencies
+          uses: actions/cache@v3
+          with:
+            path: ~/.npm
+            key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+        
+        - name: Install Dependencies
+          run: npm install
+
+        - name: Code Coverage
+          continue-on-error: true
+          run: npm run coverage
+
+        - name: Archive Coverage Result
+          uses: actions/upload-artifact@v3
+          with:
+            name: Code-Coverage-Result
+            path: coverage
+            retention-days: 5
+    
+    docker:
+      permissions: #related to GHCR package
+        packages: write 
+      runs-on: ubuntu-latest
+      needs: [unit-testing, code-coverage]
+      steps:
+        - name: Checkout Repository
+          uses: actions/checkout@v4
+
+        - name: Dockerhub Login
+          uses: docker/login-action@v2.2.0
+          with:
+            username: ${{ vars.DOCKERHUB_USERNAME }}
+            password: ${{ secrets.DOCKERHUB_PASSWORD }}
+        
+        - name: GHCR Login
+          uses: docker/login-action@v2.2.0
+          with:
+            registry: ghcr.io
+            username: ${{ github.repository_owner }}
+            password: ${{ secrets.GITHUB_TOKEN }}
+          
+        # - name: Docker Build for Testing
+        #   uses: docker/build-push-action@v4
+        #   with:
+        #     context: .
+        #     push: false
+        #     tags: |
+        #       ${{ vars.DOCKERHUB_USERNAME }}/solar-system:${{ github.sha }}
+        #       ghcr.io/${{ github.repository_owner }}/solar-system:${{ github.sha }}
+
+        # - name: Docker Image Testing
+        #   run: |
+        #     docker images
+        #     docker run --name solar-system-app -d \
+        #           -p 3000:300 \
+        #           -e MONGO_URI=$MONGO_URI \
+        #           -e MONGO_USERNAME=$MONGO_USERNAME \
+        #           -e MONGO_PASSWORD=$MONGO_PASSWORD \
+        #           ${{ vars.DOCKERHUB_USERNAME }}/solar-system:${{ github.sha }}
+        #     export IP=$(docker inspect -f '{{ range .NetworkSettings.Networks }}{{ .IPAddress }}{{ end }}' solar-system-app)
+        #     echo $IP
+        #     echo Testing Image URI using wget
+        #     wget -q -O - 127.0.0.1:3000/live | grep live
+
+        - name: Container Registry Push
+          uses: docker/build-push-action@v4
+          with:
+            context: .
+            push: true
+            tags: |
+              ${{ vars.DOCKERHUB_USERNAME }}/solar-system:${{ github.sha }}
+              ghcr.io/${{ github.repository_owner }}/solar-system:${{ github.sha }}
+
+    dev-deploy:
+      needs: docker
+      runs-on: ubuntu-latest
+      environment:
+        name: development
+      steps:
+        - name: Checkout Repo
+          uses: actions/checkout@v4
+
+        - name: Install kubectl CLI
+          uses: azure/setup-kubectl@v3
+          with:
+            version: v1.26.0
+
+        - name: Setup kubeconfig file
+          uses: azure/k8s-set-context@v3
+          with:
+            method: kubeconfig
+            kubeconfig: ${{ secrets.KUBECONFIG }}
+
+        - name: Fetch Kubernetes Cluster Details
+          run: kubectl version -o yaml
+
+        - name: Fetch Nginx controller Ip and save to Github environment Variable
+          run:  echo "INGRESS_IP=$(kubectl -n ingress-nginx get services \
+                ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')" >> $GITHUB_ENV
+
+        - name: Replace the placeholder in the manifest dirctory
+          uses: cschleiden/replace-tokens@v1
+          with:
+            tokenPrefix: '_{_'
+            tokenSuffix: '_}_'
+            files: '["kubernetes/development/*.yaml"]'
+          env:
+            NAMESPACE: '${{ vars.NAMESPACE }}'
+            REPLICAS: '${{ vars.REPLICAS }}'
+            IMAGE: ghcr.io/${{ github.repository_owner }}/solar-system:${{ github.sha}}
+            INGRESS_IP: '${{ env.INGRESS_IP }}'
+
+        - name: Check files with replaced values
+          run: cat kubernetes/development/*.yaml
