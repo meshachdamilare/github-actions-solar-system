@@ -21,7 +21,11 @@ on:
           default: dev
           required: true
           type: string
-          
+
+      outputs:
+        application-url:
+          value: ${{ jobs.reuse-deploy.outputs.APP_INGRESS_URL }}
+
       secrets:
         k8s-kubeconfig:
           required: true
@@ -88,7 +92,7 @@ jobs:
             --save-config \
             --dry-run=client -o yaml | kubectl apply -f -
 
-        - name: Deploy to Dev Env
+        - name: Deploy to ${{ inputs.environment }} Env
           run: |
             kubectl apply -f $${{ inputs.kube-manifest-dir }}
 
